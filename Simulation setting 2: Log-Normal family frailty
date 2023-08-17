@@ -1,0 +1,1092 @@
+---
+title: "Log-Normal simulation Thesis"
+author: "Vivianne Coppes"
+date: "2023-08-17"
+output: pdf_document
+---
+
+
+## Simulate families, with immediate ascertainment bias
+```{r}
+
+simulate_families_1step_RE_fam<- function(sample = TRUE, use_wrapper = FALSE, parameter_vector = NA, 
+  n_families, k_fam_size, theta, beta, s, mean_covar = 0, sd_covar = 1, censoring = TRUE
+  ) {
+
+  if (use_wrapper == TRUE) {
+
+    n_families <- parameter_vector$n_families
+    beta <- parameter_vector$beta
+    theta <- parameter_vector$theta
+    s <- parameter_vector$s
+    k_fam_size <- unlist(parameter_vector$k_fam_size)
+    
+  }
+  
+  k <- rep(k_fam_size, n_families) # List of family size per family
+  nn <- sum(table(k) * sort(unique(k)))  # Total number of individuals in all families together.
+  x <- rnorm(nn, mean = mean_covar, sd = sd_covar)  # Continuous covariate 
+  x <- sample(x, length(x))  # Shuffle the covariate values in a random fashion.
+  f <- rep(rlnorm(length(k), meanlog = 0, sdlog = sqrt(theta)), k) # family frailty term
+  my_rates <- f * exp(beta * x) * 1/60 #Exponential hazard rates per individual
+  y <- rexp(length(x), rate = my_rates) # First event
+  idi <- rep(1:nn)  # for each individual
+  id <- rep(1:length(k), k)  # for each family
+  kk <- rep(k, k)  # vector of family sizes per individual
+
+  
+
+  mat <- data.frame(idi = idi, id = id, x = x, kk = kk, f = f)   #create data frame
+  
+  if (sample == FALSE){
+    df <- mat
+    d <- sapply(1:nn, function(i) ifelse(y[i] < 100, 1, 0) )  
+    y <- sapply(1:nn, function(i) min(y[i], 100))  
+    df$y <- y
+    df$d <- d
+    
+    # Select families under selection criterium s, i.e. at least s cases: ------------------------------------------
+    st <- aggregate(d ~ id, data = df, FUN=sum)  # Obtain the number of cases per family ID.
+    selected_fams <- st$id[which(st$d >= s)]  # Select the specific families by ID.
+    
+    data<-df[which(df$id %in% selected_fams), ]
+
+  } else{
+  
+  # -------------------------------------------- functions:
+  
+  #Function for generation of exponential hazard rates per individual
+  Hazard_rates <- function(t,Pers_Frail,x,beta) {as.numeric(t*0+Pers_Frail * exp(beta * x) * 1/60)}  
+  #Function for cum hazard per individual
+  Lambda <- function(t) {integrate(Hazard_rates, 0, t, Pers_Frail=mat$f[i], x=mat$x[i],beta=beta)}[[1]]
+
+  # -------------------------------------------- recurrent events:
+  
+  if (censoring == FALSE){ 
+      DF <- data.frame()
+      for (i in 1:nn) {
+        Tmax = c = runif(1,100,100)  # The censoring age
+        if(y[i] < Tmax) {
+           t=y[i]; X=t
+           while(X[length(X)]<=Tmax){
+            Ft=function(x) 1-exp(-Lambda(t+x)+Lambda(t))
+            Ftinv=function(u){
+             a=0
+             b=Tmax
+             for(j in 1:20){
+               if(Ft((a+b)/2)<=u){binf=(a+b)/2;bsup=b}
+               if(Ft((a+b)/2)>=u){bsup=(a+b)/2;binf=a}
+               a=binf
+               b=bsup
+             }
+             return((a+b)/2)
+            }
+            x=Ftinv(runif(1))
+            t=t+x
+            X=c(X,t)
+           }
+           X = X[X < 100]
+           t.start = c(0,X)
+           t.stop = c(X,Tmax)
+           status = c(rep(1,(length(X))),0)
+           event = c(1:(length(X)+1))
+         } else{ 
+           t.start = 0
+           t.stop = Tmax
+           status = 0
+           event = 1
+         }
+         out <- data.frame(idi = i, t.start=t.start,t.stop=t.stop, status =status, event = event)
+         DF <- rbind(DF,out)
+        }
+  } else{ 
+     DF <- data.frame()
+      for (i in 1:nn) {
+        Tmax = runif(1,100,100)  # The censoring age
+        c <- min(rexp(1, rate=1/60), 100)
+        if(y[i] < c) {
+           t=y[i]; X=t
+           while(X[length(X)]<=Tmax){
+            Ft=function(x) 1-exp(-Lambda(t+x)+Lambda(t))
+            Ftinv=function(u){
+             a=0
+             b=Tmax
+             for(j in 1:20){
+               if(Ft((a+b)/2)<=u){binf=(a+b)/2;bsup=b}
+               if(Ft((a+b)/2)>=u){bsup=(a+b)/2;binf=a}
+               a=binf
+               b=bsup
+             }
+             return((a+b)/2)
+            }
+            x=Ftinv(runif(1))
+            t=t+x
+            X=c(X,t)
+           }
+           X = X[X < c]
+           t.start = c(0,X)
+           t.stop = c(X,c)
+           status = c(rep(1,(length(X))),0)
+           event = c(1:(length(X)+1))
+         } else{ 
+           t.start = 0
+           t.stop = c
+           status = 0
+           event = 1
+         }
+         out <- data.frame(idi = i, t.start=t.start,t.stop=t.stop, status =status, event = event)
+         DF <- rbind(DF,out)
+        }
+  }
+  DF_selection <- merge(mat,DF, by ="idi")
+  
+  df <- DF_selection[DF_selection$event == 1,]
+  df <- subset(df, select = -c(t.start,event))
+  names(df)[names(df) == "t.stop"] <- "y"
+  names(df)[names(df) == "status"] <- "d"
+    
+
+  #Select families with at least 1 young case (time to event lower than first quartile of y):
+  index<-which(df$y<=quantile(df$y)[2]&df$d==1)
+  #index<-which(df$y<=quantile(df$y, probs = c(0,0.10,0.25))[2]&df$d==1)
+  id_sel<-unique(df$id[index])
+  index<-unlist(lapply(1:length(sort(id_sel)),function(i)which(df$id==sort(id_sel)[i])))
+  df<-df[index,]
+      
+  # Select families under selection criterium s, i.e. at least s cases: 
+     
+  st <- aggregate(d ~ id, data = df, FUN=sum)  # Obtain the number of cases per family ID.
+  selected_fams <- st$id[which(st$d >= s)]  # Select the specific families by ID.
+        
+  data<-DF_selection[which(DF_selection$id %in% selected_fams), ]
+  
+  }
+  
+  return(as.data.frame(data))
+   
+}
+```
+
+## Simulate families, without immediate ascertainment bias
+```{r}
+
+simulate_families_1step_RE_fam5<- function(sample = TRUE, use_wrapper = FALSE, parameter_vector = NA, 
+  n_families, k_fam_size, theta, beta, s, mean_covar = 0, sd_covar = 1, censoring = TRUE
+  ) {
+
+  if (use_wrapper == TRUE) {
+
+    n_families <- parameter_vector$n_families
+    beta <- parameter_vector$beta
+    theta <- parameter_vector$theta
+    s <- parameter_vector$s
+    k_fam_size <- unlist(parameter_vector$k_fam_size)
+    
+  }
+  
+  k <- rep(k_fam_size, n_families) # List of family size per family
+  nn <- sum(table(k) * sort(unique(k)))  # Total number of individuals in all families together.
+  x <- rnorm(nn, mean = mean_covar, sd = sd_covar)  # Continuous covariate 
+  x <- sample(x, length(x))  # Shuffle the covariate values in a random fashion.
+  f <- rep(rlnorm(length(k), meanlog = 0, sdlog = sqrt(theta)), k) # person frailty term
+  my_rates <- f * exp(beta * x) * 1/60 #Exponential hazard rates per individual
+  y <- rexp(length(x), rate = my_rates) # First event
+  idi <- rep(1:nn)  # for each individual
+  id <- rep(1:length(k), k)  # for each family
+  kk <- rep(k, k)  # vector of family sizes per individual
+
+  
+
+  mat <- data.frame(idi = idi, id = id, x = x, kk = kk, f = f)   #create data frame
+  
+  if (sample == FALSE){
+    df <- mat
+    d <- sapply(1:nn, function(i) ifelse(y[i] < 100, 1, 0) )  
+    y <- sapply(1:nn, function(i) min(y[i], 100))  
+    df$y <- y
+    df$d <- d
+    
+    # Select families under selection criterium s, i.e. at least s cases: ------------------------------------------
+    st <- aggregate(d ~ id, data = df, FUN=sum)  # Obtain the number of cases per family ID.
+    selected_fams <- st$id[which(st$d >= s)]  # Select the specific families by ID.
+    
+    data<-df[which(df$id %in% selected_fams), ]
+
+  } else{
+  
+  # -------------------------------------------- functions:
+  
+  #Function for generation of exponential hazard rates per individual
+  Hazard_rates <- function(t,Pers_Frail,x,beta) {as.numeric(t*0+Pers_Frail * exp(beta * x) * 1/60)}  
+  #Function for cum hazard per individual
+  Lambda <- function(t) {integrate(Hazard_rates, 0, t, Pers_Frail=mat$f[i], x=mat$x[i],beta=beta)}[[1]]
+
+  # -------------------------------------------- recurrent events:
+  
+  if (censoring == FALSE){ 
+      DF <- data.frame()
+      for (i in 1:nn) {
+        Tmax = c = runif(1,100,100)  # The censoring age
+        if(y[i] < Tmax) {
+           t=y[i]; X=t
+           while(X[length(X)]<=Tmax){
+            Ft=function(x) 1-exp(-Lambda(t+x)+Lambda(t))
+            Ftinv=function(u){
+             a=0
+             b=Tmax
+             for(j in 1:20){
+               if(Ft((a+b)/2)<=u){binf=(a+b)/2;bsup=b}
+               if(Ft((a+b)/2)>=u){bsup=(a+b)/2;binf=a}
+               a=binf
+               b=bsup
+             }
+             return((a+b)/2)
+            }
+            x=Ftinv(runif(1))
+            t=t+x
+            X=c(X,t)
+           }
+           X = X[X < 100]
+           t.start = c(0,X)
+           t.stop = c(X,Tmax)
+           status = c(rep(1,(length(X))),0)
+           event = c(1:(length(X)+1))
+         } else{ 
+           t.start = 0
+           t.stop = Tmax
+           status = 0
+           event = 1
+         }
+         out <- data.frame(idi = i, t.start=t.start,t.stop=t.stop, status =status, event = event)
+         DF <- rbind(DF,out)
+        }
+  } else{ 
+     DF <- data.frame()
+      for (i in 1:nn) {
+        Tmax = runif(1,100,100)  # The censoring age
+        c <- min(rexp(1, rate=1/60), 100)
+        if(y[i] < c) {
+           t=y[i]; X=t
+           while(X[length(X)]<=Tmax){
+            Ft=function(x) 1-exp(-Lambda(t+x)+Lambda(t))
+            Ftinv=function(u){
+             a=0
+             b=Tmax
+             for(j in 1:20){
+               if(Ft((a+b)/2)<=u){binf=(a+b)/2;bsup=b}
+               if(Ft((a+b)/2)>=u){bsup=(a+b)/2;binf=a}
+               a=binf
+               b=bsup
+             }
+             return((a+b)/2)
+            }
+            x=Ftinv(runif(1))
+            t=t+x
+            X=c(X,t)
+           }
+           X = X[X < c]
+           t.start = c(0,X)
+           t.stop = c(X,c)
+           status = c(rep(1,(length(X))),0)
+           event = c(1:(length(X)+1))
+         } else{ 
+           t.start = 0
+           t.stop = c
+           status = 0
+           event = 1
+         }
+         out <- data.frame(idi = i, t.start=t.start,t.stop=t.stop, status =status, event = event)
+         DF <- rbind(DF,out)
+        }
+  }
+  DF_selection <- merge(mat,DF, by ="idi")
+        
+  data<-DF_selection
+  
+  }
+  
+  return(as.data.frame(data))
+   
+}
+```
+
+## Generate populations
+```{r} 
+#Generate populations for simulation scenarios
+library(survival)
+library(tidyr)
+library(coxme)
+
+t = 20
+breaks = c(0,20,40,60,80,100)
+n_families=50000
+k_fam_size=c(1,1)
+theta=0.5
+beta=0
+s=0
+mean_covar = 0
+sd_covar = 1
+
+start_time <- Sys.time()
+# Simulate population
+df_population<-simulate_families_1step_RE_fam(sample = FALSE,n_families=n_families, k_fam_size=k_fam_size, theta=theta, beta=beta, s=s, mean_covar = mean_covar, sd_covar = sd_covar, censoring = FALSE)
+
+end_time <- Sys.time()
+coef_for_beta_p <- coef(coxph(Surv(y, d==1) ~ x, data = df_population))
+
+#Calculate mu in age groups#
+
+
+df_population$y_cat <- cut(df_population$y, breaks = breaks)
+
+# Store number of cases and unaffected individuals per age group
+agegroups.info <- aggregate(idi ~ y_cat + d, data=df_population, length)
+
+agegroups.info <- agegroups.info %>% spread(d, -y_cat)
+colnames(agegroups.info) <- c("k","s_k","r_k")
+agegroups.info[is.na(agegroups.info) ==T]=0
+
+# Calculate person years per outcome and age group
+personyears <- aggregate(y ~ y_cat + d, data = df_population[,c("d","y_cat", "y"),], sum) %>% spread(d, -y_cat)
+colnames(personyears) <- c("k","q_k","p_k")
+agegroups.info <- merge(agegroups.info, personyears, by="k")  # Merge.
+
+labs <- levels(as.factor(df_population$y_cat))  # Store names of age groups.
+
+## This row does not work if not all columns are filled:
+agegroups.info$years.before <- breaks[which(breaks != max(breaks))]
+q <- agegroups.info$q_k - (agegroups.info$years.before * agegroups.info$s_k)  # Person years among censored individuals.
+p <- agegroups.info$p_k - (agegroups.info$years.before * agegroups.info$r_k)  # Person years among cases.
+agegroups.info$t <- t  # Years per age group
+t <- agegroups.info$t
+s <- agegroups.info$s_k  # Number of censored.
+r <- agegroups.info$r_k  # Number of cases.
+k <- agegroups.info$k  # Age group label.
+agegroups.info[is.na(agegroups.info) ==T]=0
+
+cat.per.ind <- as.numeric(df_population$y_cat)
+n_agegroups <- max(cat.per.ind)
+
+for (k in 1:n_agegroups){
+    if(k!=n_agegroups){calcsum <- sum(agegroups.info$r_k[(k+1):n_agegroups], agegroups.info$s_k[(k+1):n_agegroups])} else {calcsum <- 0}
+   agegroups.info$mu_k[k] = agegroups.info$r_k[k]/ (agegroups.info$p_k[k]+agegroups.info$q_k[k]+agegroups.info$t[k]*calcsum)
+
+}
+
+#Calculate Sk and pk based on the intervals
+St_int<-c(1,exp(-cumsum(agegroups.info$mu_k*20)))
+St_int_cond<-c()
+for (i in 1:length(St_int)){
+St_int_cond[i]<-St_int[i+1]/St_int[i]
+}
+
+Sk_int<-St_int_cond[-length(St_int_cond)]
+
+pk_int=1-Sk_int
+
+agegroups.info$Sk<-Sk_int
+agegroups.info$pk<-pk_int
+
+agegroups.info1 = agegroups.info 
+```
+
+## Simulate families of 2, with immediate ascertainment bias (s=2)
+```{r}
+library(survival)
+library(tidyr)
+library(coxme)
+library(dplyr)
+
+M=1000
+
+# first event analysis family of 2 (s=1): out_FE_.. = output unweighted method, out_w_FE_.. = output generalised weighted cohort method, out_f_FE_.. = output frailty model, out_fr_w_FE_.. = output new two-stage method, theta_list_FE_.. = output random effect two-stage method. 
+# Recurrent events analysis family of 2 (s=1): out_RE_.. = output unweighted method, out_w_RE_.. = output generalised weighted cohort method, out_f_RE_.. = output frailty model, out_fr_w_RE_.. = output new two-stage method, theta_list_RE_.. = output random effect two-stage method.
+out_FE <- matrix(NA,M,3)  
+out_w_FE<-matrix(NA,M,3)   
+out_f_FE<-matrix(NA,M,3) 
+out_fr_w_FE <- matrix(NA,M,3) 
+theta_list_FE <- numeric()    
+out_RE<-matrix(NA,M,3)        
+out_w_RE<-matrix(NA,M,3)    
+out_f_RE<-matrix(NA,M,3)    
+out_fr_w_RE <- matrix(NA,M,3) 
+theta_list_RE <- numeric()    
+library(survival)
+library(tidyr)
+
+
+for (j in 1:M){
+print(j)
+set.seed(j)
+
+#Data generation
+
+t = 20
+breaks = c(0,20,40,60,80,100)
+
+n_families=500
+k_fam_size=c(2,2)
+theta=1
+beta=0.5
+s=1
+mean_covar = 0
+sd_covar = 1
+censoring = T
+
+
+df_families<-simulate_families_1step_RE_fam(sample = TRUE,n_families=n_families, k_fam_size=k_fam_size, theta=theta, beta=beta, s=s, mean_covar =mean_covar, sd_covar = sd_covar, censoring = TRUE)
+
+#------- weights
+df_event1 <- df_families[df_families$event == 1,]
+df_event1 <- subset(df_event1, select = -c(t.start,event))
+names(df_event1)[names(df_event1) == "t.stop"] <- "y"
+names(df_event1)[names(df_event1) == "status"] <- "d"
+
+population_incidence <- agegroups.info$mu_k *100000 # Get population incidence per 100000 from population data
+
+df_out <- Prepare_data(df_event1, population_incidence, breaks)
+
+w1<-Calculate_weights(df_out)
+df_out$w <- w1
+weights_info <- data.frame(df_out$idi, df_out$w)
+colnames(weights_info) <- c("idi","w")
+df3 <- merge(df_families, weights_info, by="idi", all=T)
+df3$w <- ifelse(df3$event > 1, 1, df3$w)
+# ----------------------
+# First event #
+# ----------------------
+
+cens_prop_FE<-table(df_out$d)[1]/sum(table(df_out$d))
+
+# ----  unweighted model
+
+model1_first_event<-try(coxph(Surv(y, d==1) ~ x+cluster(idi), data =  df_out)  ) 
+
+  if(sum(class(model1_first_event)=="try-error")>0) {
+  out_FE[j,] = c(NA,NA,NA)
+  } else {
+  out_FE[j,]<-c(summary(model1_first_event)$coef[1],summary(model1_first_event)$coef[4],cens_prop_FE)}
+
+# ----  weights model
+
+weights_first_events <-try(coxph(Surv(y, d==1) ~ x+cluster(idi) , weights = w, data =  df_out))
+
+  if(sum(class(weights_first_events)=="try-error")>0) {
+  out_w_FE[j,] = c(NA,NA,NA)
+  } else {
+  out_w_FE[j,]<-c(summary(weights_first_events)$coef[1],summary(weights_first_events)$coef[4],cens_prop_FE)}
+
+# ----  frailty model
+
+frailty_first_event<-try(coxme(Surv(y, d) ~ x + (1|id), data =  df_out)) 
+
+  if(sum(class(frailty_first_event)=="try-error")>0) {
+  out_f_FE[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_f_FE[j,]<-c(coef(frailty_first_event),(sqrt(vcov(frailty_first_event))),cens_prop_FE)} 
+
+# ----  frailty model + weights + offset(frailty)
+
+PredFrail <- ranef(frailty_first_event)
+PreFr <- data.frame(names(PredFrail$id),PredFrail$id)
+colnames(PreFr) <- c("id","pred_frailty")
+theta_list_FE[j] <- as.numeric(frailty_first_event$vcoef)
+df_FE_weights_frailty <- merge(df_out, PreFr, by="id", all=T)
+
+Model1_weigths_frailty <- try(coxph(Surv(y, d) ~ x+offset(pred_frailty), weights = w, data =  df_FE_weights_frailty))
+
+
+  if(sum(class(Model1_weigths_frailty)=="try-error")>0) {
+  out_fr_w_FE[j,] = c(NA,NA,NA)
+  } else {
+  out_fr_w_FE[j,]<-c(summary(Model1_weigths_frailty)$coef[1],summary(Model1_weigths_frailty)$coef[3],cens_prop_FE)} 
+
+
+
+# ----------------------
+# Recurrent events #
+# ----------------------
+
+cens_prop<-table(df_families[df_families$event == 1,]$status)[1]/sum(table(df_families[df_families$event == 1,]$status)) #We monitor the resulting proportion of censoring
+
+model1<-try(coxph(Surv(t.start,t.stop,status) ~ x + cluster(idi)  , data =  df_families))
+
+  if(sum(class(model1)=="try-error")>0) {
+  out_RE[j,] = c(NA,NA,NA)
+  } else {
+  out_RE[j,]<-c(summary(model1)$coef[1],summary(model1)$coef[4],cens_prop)}
+
+#------- with weights 1
+
+model_weights<-try(coxph(Surv(t.start,t.stop,status) ~ x + cluster(idi) , weights = w, data =  df3))
+
+  if(sum(class(model_weights)=="try-error")>0) {
+  out_w_RE[j,] = c(NA,NA,NA)
+  } else {
+  out_w_RE[j,]<-c(summary(model_weights)$coef[1],summary(model_weights)$coef[4],cens_prop)}
+
+#------- with frailty
+model_frailty<-try(coxme(Surv(t.start,t.stop,status) ~ x + (1|id) , data =  df_families))
+
+  if(sum(class(model_frailty)=="try-error")>0) {
+  out_f_RE[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_f_RE[j,]<-c(coef(model_frailty),(sqrt(vcov(model_frailty))),cens_prop)} #output slightly different than model with no frailty
+
+# ------------ Frailty and weights + offset(frail)
+PredictFrailty <- ranef(model_frailty)
+
+PF <- data.frame(names(PredictFrailty$id),PredictFrailty$id)
+colnames(PF) <- c("id","pred_frailty")
+theta_list_RE[j] <- as.numeric(model_frailty$vcoef)
+df_weights_frailty <- merge(df3, PF, by="id", all=T)
+
+
+Model_weigths_frailty <- try(coxph(Surv(t.start,t.stop,status) ~ x+offset(pred_frailty), weights = w, data =  df_weights_frailty))
+
+
+  if(sum(class(Model_weigths_frailty)=="try-error")>0) {
+  out_fr_w_RE[j,] = c(NA,NA,NA)
+  } else {
+  out_fr_w_RE[j,]<-c(summary(Model_weigths_frailty)$coef[1],summary(Model_weigths_frailty)$coef[3],cens_prop)} 
+
+
+}  
+```
+
+## Simulate families of 5, without immediate ascertainment bias
+```{r}
+library(survival)
+library(tidyr)
+library(coxme)
+library(dplyr)
+
+M=1000
+
+# first event analysis: out_FE_.. = output unweighted method, out_w_FE_.. = output generalised weighted cohort method, out_f_FE_.. = output frailty model, out_fr_w_FE_.. = output new two-stage method, theta_list_FE_.. = output random effect two-stage method. S0 = family of 5 (s=0), S1 = family of 5 (s=1), S3 = family of 5 (s=3).
+# Recurrent events analysis: out_RE_.. = output unweighted method, out_w_RE_.. = output generalised weighted cohort method, out_f_RE_.. = output frailty model, out_fr_w_RE_.. = output new two-stage method, theta_list_RE_.. = output random effect two-stage method. S0 = family of 5 (s=0), S1 = family of 5 (s=1), S3 = family of 5 (s=3).
+out_FE_S0 <- matrix(NA,M,3) 
+out_w_FE_S0<-matrix(NA,M,3) 
+out_f_FE_S0<-matrix(NA,M,3) 
+out_fr_w_FE_S0 <- matrix(NA,M,3)  
+theta_list_FE_S0 <- numeric() 
+out_RE_S0<-matrix(NA,M,3)  
+out_w_RE_S0<-matrix(NA,M,3) 
+out_f_RE_S0<-matrix(NA,M,3) 
+out_fr_w_RE_S0 <- matrix(NA,M,3)
+theta_list_RE_S0 <- numeric() 
+out_FE_S1 <- matrix(NA,M,3)
+out_w_FE_S1<-matrix(NA,M,3)
+out_f_FE_S1<-matrix(NA,M,3)
+out_fr_w_FE_S1 <- matrix(NA,M,3)
+theta_list_FE_S1 <- numeric()
+out_RE_S1<-matrix(NA,M,3)
+out_w_RE_S1<-matrix(NA,M,3)
+out_f_RE_S1<-matrix(NA,M,3)
+out_fr_w_RE_S1 <- matrix(NA,M,3)
+theta_list_RE_S1 <- numeric()
+out_FE_S3 <- matrix(NA,M,3)
+out_w_FE_S3<-matrix(NA,M,3)
+out_f_FE_S3<-matrix(NA,M,3)
+out_fr_w_FE_S3 <- matrix(NA,M,3)
+theta_list_FE_S3 <- numeric()
+out_RE_S3<-matrix(NA,M,3)
+out_w_RE_S3<-matrix(NA,M,3)
+out_f_RE_S3<-matrix(NA,M,3)
+out_fr_w_RE_S3 <- matrix(NA,M,3)
+theta_list_RE_S3 <- numeric()
+library(survival)
+library(tidyr)
+
+
+for (j in 1:M){
+print(j)
+set.seed(j)
+
+#Data generation#
+
+t = 20
+breaks = c(0,20,40,60,80,100)
+
+n_families=500
+k_fam_size=c(5,5)
+theta=1
+beta=0.5
+s=0
+mean_covar = 0
+sd_covar = 1
+censoring = T
+
+
+df_families<-simulate_families_1step_RE_fam5(sample = TRUE,n_families=n_families, k_fam_size=k_fam_size, theta=theta, beta=beta, s=s, mean_covar =mean_covar, sd_covar = sd_covar, censoring = TRUE)
+
+df_event <- df_families[df_families$event == 1,]
+df_event <- subset(df_event, select = -c(t.start,event))
+names(df_event)[names(df_event) == "t.stop"] <- "y"
+names(df_event)[names(df_event) == "status"] <- "d"
+
+
+  #Select families with at least 1 young case (time to event lower than first quartile of y):
+  index<-which(df_event$y<=quantile(df_event$y)[2]&df_event$d==1)
+  id_sel<-unique(df_event$id[index])
+  index<-unlist(lapply(1:length(sort(id_sel)),function(i)which(df_event$id==sort(id_sel)[i])))
+  df_event<-df_event[index,]
+  
+  # Select families under selection criterium s = 1
+       
+  st <- aggregate(d ~ id, data = df_event, FUN=sum)  # Obtain the number of cases per family ID.
+  selected_fams <- st$id[which(st$d >= 1)]  # Select the specific families by ID.
+        
+  df_families_s1<-df_families[which(df_families$id %in% selected_fams), ]
+  
+  
+  # Select families under selection criterium s = 3
+  
+  
+  st <- aggregate(d ~ id, data = df_event, FUN=sum)  # Obtain the number of cases per family ID.
+  selected_fams <- st$id[which(st$d >= 3)]  # Select the specific families by ID.
+        
+  df_families_s3<-df_families[which(df_families$id %in% selected_fams), ]
+  
+# ---------------
+# --------------- S = 0 and no youth selection
+# ---------------
+
+#------- weights
+
+df_event_s0 <- df_families[df_families$event == 1,]
+df_event_s0 <- subset(df_event_s0, select = -c(t.start,event))
+names(df_event_s0)[names(df_event_s0) == "t.stop"] <- "y"
+names(df_event_s0)[names(df_event_s0) == "status"] <- "d"
+  
+population_incidence <- agegroups.info$mu_k *100000 # Get population incidence per 100000 from population data
+
+df_out_s0 <- Prepare_data(df_event_s0, population_incidence, breaks)
+
+w1<-Calculate_weights(df_out_s0)
+df_out_s0$w <- w1
+weights_info <- data.frame(df_out_s0$idi, df_out_s0$w)
+colnames(weights_info) <- c("idi","w")
+df_s0 <- merge(df_families, weights_info, by="idi", all=T)
+df_s0$w <- ifelse(df_s0$event > 1, 1, df_s0$w)
+
+# ----------------------
+# First event #
+# ----------------------
+
+cens_prop_FE_S0<-table(df_out_s0$d)[1]/sum(table(df_out_s0$d))
+
+# ----  unweighted model
+
+model1_first_event<-try(coxph(Surv(y, d==1) ~ x+cluster(idi), data =  df_out_s0)  ) 
+
+  if(sum(class(model1_first_event)=="try-error")>0) {
+  out_FE_S0[j,] = c(NA,NA,NA)
+  } else {
+  out_FE_S0[j,]<-c(summary(model1_first_event)$coef[1],summary(model1_first_event)$coef[4],cens_prop_FE_S0)}
+
+# ----  weights model
+
+weights_first_events <-try(coxph(Surv(y, d==1) ~ x+cluster(idi) , weights = w, data =  df_out_s0))
+
+  if(sum(class(weights_first_events)=="try-error")>0) {
+  out_w_FE_S0[j,] = c(NA,NA,NA)
+  } else {
+  out_w_FE_S0[j,]<-c(summary(weights_first_events)$coef[1],summary(weights_first_events)$coef[4],cens_prop_FE_S0)}
+
+# ----  frailty model
+
+frailty_first_event<-try(coxme(Surv(y, d) ~ x + (1|id), data =  df_out_s0)) 
+
+  if(sum(class(frailty_first_event)=="try-error")>0) {
+  out_f_FE_S0[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_f_FE_S0[j,]<-c(coef(frailty_first_event),(sqrt(vcov(frailty_first_event))),cens_prop_FE_S0)} 
+
+# ----  frailty model + weights + offset(frailty)
+
+PredFrail <- ranef(frailty_first_event)
+PreFr <- data.frame(names(PredFrail$id),PredFrail$id)
+colnames(PreFr) <- c("id","pred_frailty")
+theta_list_FE_S0[j] <- as.numeric(frailty_first_event$vcoef)
+df_FE_weights_frailty <- merge(df_out_s0, PreFr, by="id", all=T)
+
+Model1_weigths_frailty <- try(coxph(Surv(y, d) ~ x+offset(pred_frailty), weights = w, data =  df_FE_weights_frailty))
+
+
+  if(sum(class(Model1_weigths_frailty)=="try-error")>0) {
+  out_fr_w_FE_S0[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_fr_w_FE_S0[j,]<-c(summary(Model1_weigths_frailty)$coef[1],summary(Model1_weigths_frailty)$coef[3],cens_prop_FE_S0)} 
+
+
+# ----------------------
+# Recurrent events #
+# ----------------------
+
+cens_prop<-table(df_families[df_families$event == 1,]$status)[1]/sum(table(df_families[df_families$event == 1,]$status)) #We monitor the resulting proportion of censoring
+
+model1<-try(coxph(Surv(t.start,t.stop,status) ~ x + cluster(idi)  , data =  df_families))
+
+  if(sum(class(model1)=="try-error")>0) {
+  out_RE_S0[j,] = c(NA,NA,NA)
+  } else {
+  out_RE_S0[j,]<-c(summary(model1)$coef[1],summary(model1)$coef[4],cens_prop)}
+
+#------- with weights 1
+
+model_weights<-try(coxph(Surv(t.start,t.stop,status) ~ x + cluster(idi) , weights = w, data =  df_s0))
+
+  if(sum(class(model_weights)=="try-error")>0) {
+  out_w_RE_S0[j,] = c(NA,NA,NA)
+  } else {
+  out_w_RE_S0[j,]<-c(summary(model_weights)$coef[1],summary(model_weights)$coef[4],cens_prop)}
+
+#------- with frailty
+model_frailty<-try(coxme(Surv(t.start,t.stop,status) ~ x + (1|id) , data =  df_families))
+
+  if(sum(class(model_frailty)=="try-error")>0) {
+  out_f_RE_S0[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_f_RE_S0[j,]<-c(coef(model_frailty),(sqrt(vcov(model_frailty))),cens_prop)} 
+
+# ------------ Frailty and weights + offset(frail)
+PredictFrailty <- ranef(model_frailty)
+
+PF <- data.frame(names(PredictFrailty$id),PredictFrailty$id)
+colnames(PF) <- c("id","pred_frailty")
+theta_list_RE_S0[j] <- as.numeric(model_frailty$vcoef)
+df_weights_frailty <- merge(df_s0, PF, by="id", all=T)
+
+Model_weigths_frailty <- try(coxph(Surv(t.start,t.stop,status) ~ x+offset(pred_frailty), weights = w, data =  df_weights_frailty))
+
+
+  if(sum(class(Model_weigths_frailty)=="try-error")>0) {
+  out_fr_w_RE_S0[j,] = c(NA,NA,NA)
+  } else {
+  out_fr_w_RE_S0[j,]<-c(summary(Model_weigths_frailty)$coef[1],summary(Model_weigths_frailty)$coef[3],cens_prop)}
+  
+# ---------------
+# --------------- S = 1
+# ---------------
+
+#------- weights
+
+df_event1 <- df_families_s1[df_families_s1$event == 1,]
+df_event1 <- subset(df_event1, select = -c(t.start,event))
+names(df_event1)[names(df_event1) == "t.stop"] <- "y"
+names(df_event1)[names(df_event1) == "status"] <- "d"
+  
+population_incidence <- agegroups.info$mu_k *100000 # Get population incidence per 100000 from population data
+
+df_out <- Prepare_data(df_event1, population_incidence, breaks)
+
+w1<-Calculate_weights(df_out)
+df_out$w <- w1
+weights_info <- data.frame(df_out$idi, df_out$w)
+colnames(weights_info) <- c("idi","w")
+df3 <- merge(df_families_s1, weights_info, by="idi", all=T)
+df3$w <- ifelse(df3$event > 1, 1, df3$w)
+# ----------------------
+# First event #
+# ----------------------
+
+cens_prop_FE<-table(df_out$d)[1]/sum(table(df_out$d))
+
+# ----  unweighted model
+
+model1_first_event<-try(coxph(Surv(y, d==1) ~ x+cluster(idi), data =  df_out)  ) 
+
+  if(sum(class(model1_first_event)=="try-error")>0) {
+  out_FE_S1[j,] = c(NA,NA,NA)
+  } else {
+  out_FE_S1[j,]<-c(summary(model1_first_event)$coef[1],summary(model1_first_event)$coef[4],cens_prop_FE)}
+
+# ----  weights model
+
+weights_first_events <-try(coxph(Surv(y, d==1) ~ x+cluster(idi) , weights = w, data =  df_out))
+
+  if(sum(class(weights_first_events)=="try-error")>0) {
+  out_w_FE_S1[j,] = c(NA,NA,NA)
+  } else {
+  out_w_FE_S1[j,]<-c(summary(weights_first_events)$coef[1],summary(weights_first_events)$coef[4],cens_prop_FE)}
+
+# ----  frailty model
+
+frailty_first_event<-try(coxme(Surv(y, d) ~ x + (1|id), data =  df_out)) 
+
+  if(sum(class(frailty_first_event)=="try-error")>0) {
+  out_f_FE_S1[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_f_FE_S1[j,]<-c(coef(frailty_first_event),(sqrt(vcov(frailty_first_event))),cens_prop_FE)} 
+
+# ----  frailty model + weights + offset(frailty)
+
+PredFrail <- ranef(frailty_first_event)
+PreFr <- data.frame(names(PredFrail$id),PredFrail$id)
+colnames(PreFr) <- c("id","pred_frailty")
+theta_list_FE_S1[j] <- as.numeric(frailty_first_event$vcoef)
+df_FE_weights_frailty <- merge(df_out, PreFr, by="id", all=T)
+
+Model1_weigths_frailty <- try(coxph(Surv(y, d) ~ x+offset(pred_frailty), weights = w, data =  df_FE_weights_frailty))
+
+
+  if(sum(class(Model1_weigths_frailty)=="try-error")>0) {
+  out_fr_w_FE_S1[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_fr_w_FE_S1[j,]<-c(summary(Model1_weigths_frailty)$coef[1],summary(Model1_weigths_frailty)$coef[3],cens_prop_FE)} 
+
+
+# ----------------------
+# Recurrent events #
+# ----------------------
+
+cens_prop<-table(df_families_s1[df_families_s1$event == 1,]$status)[1]/sum(table(df_families_s1[df_families_s1$event == 1,]$status)) #We monitor the resulting proportion of censoring
+
+model1<-try(coxph(Surv(t.start,t.stop,status) ~ x + cluster(idi)  , data =  df_families_s1))
+
+  if(sum(class(model1)=="try-error")>0) {
+  out_RE_S1[j,] = c(NA,NA,NA)
+  } else {
+  out_RE_S1[j,]<-c(summary(model1)$coef[1],summary(model1)$coef[4],cens_prop)}
+
+#------- with weights 1
+
+model_weights<-try(coxph(Surv(t.start,t.stop,status) ~ x + cluster(idi) , weights = w, data =  df3))
+
+  if(sum(class(model_weights)=="try-error")>0) {
+  out_w_RE_S1[j,] = c(NA,NA,NA)
+  } else {
+  out_w_RE_S1[j,]<-c(summary(model_weights)$coef[1],summary(model_weights)$coef[4],cens_prop)}
+
+#------- with frailty
+model_frailty<-try(coxme(Surv(t.start,t.stop,status) ~ x + (1|id) , data =  df_families_s1))
+
+  if(sum(class(model_frailty)=="try-error")>0) {
+  out_f_RE_S1[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_f_RE_S1[j,]<-c(coef(model_frailty),(sqrt(vcov(model_frailty))),cens_prop)} 
+
+# ------------ Frailty and weights + offset(frail)
+PredictFrailty <- ranef(model_frailty)
+
+PF <- data.frame(names(PredictFrailty$id),PredictFrailty$id)
+colnames(PF) <- c("id","pred_frailty")
+theta_list_RE_S1[j] <- as.numeric(model_frailty$vcoef)
+df_weights_frailty <- merge(df3, PF, by="id", all=T)
+
+Model_weigths_frailty <- try(coxph(Surv(t.start,t.stop,status) ~ x+offset(pred_frailty), weights = w, data =  df_weights_frailty))
+
+
+  if(sum(class(Model_weigths_frailty)=="try-error")>0) {
+  out_fr_w_RE_S1[j,] = c(NA,NA,NA)
+  } else {
+  out_fr_w_RE_S1[j,]<-c(summary(Model_weigths_frailty)$coef[1],summary(Model_weigths_frailty)$coef[3],cens_prop)} 
+
+
+# ---------------
+# --------------- S = 3
+# ---------------
+
+#------- weights
+
+df_event1 <- df_families_s3[df_families_s3$event == 1,]
+df_event1 <- subset(df_event1, select = -c(t.start,event))
+names(df_event1)[names(df_event1) == "t.stop"] <- "y"
+names(df_event1)[names(df_event1) == "status"] <- "d"
+  
+population_incidence <- agegroups.info$mu_k *100000 # Get population incidence per 100000 from population data
+
+df_out <- Prepare_data(df_event1, population_incidence, breaks)
+
+w1<-Calculate_weights(df_out)
+df_out$w <- w1
+weights_info <- data.frame(df_out$idi, df_out$w)
+colnames(weights_info) <- c("idi","w")
+df3 <- merge(df_families_s3, weights_info, by="idi", all=T)
+df3$w <- ifelse(df3$event > 1, 1, df3$w)
+
+# ----------------------
+# First event #
+# ----------------------
+
+cens_prop_FE<-table(df_out$d)[1]/sum(table(df_out$d))
+
+# ----  unweighted model
+
+model1_first_event<-try(coxph(Surv(y, d==1) ~ x+cluster(idi), data =  df_out)  ) 
+
+  if(sum(class(model1_first_event)=="try-error")>0) {
+  out_FE_S3[j,] = c(NA,NA,NA)
+  } else {
+  out_FE_S3[j,]<-c(summary(model1_first_event)$coef[1],summary(model1_first_event)$coef[4],cens_prop_FE)}
+
+# ----  weights model
+
+weights_first_events <-try(coxph(Surv(y, d==1) ~ x+cluster(idi) , weights = w, data =  df_out))
+
+  if(sum(class(weights_first_events)=="try-error")>0) {
+  out_w_FE_S3[j,] = c(NA,NA,NA)
+  } else {
+  out_w_FE_S3[j,]<-c(summary(weights_first_events)$coef[1],summary(weights_first_events)$coef[4],cens_prop_FE)}
+
+# ----  frailty model
+
+frailty_first_event<-try(coxme(Surv(y, d) ~ x + (1|id), data =  df_out)) 
+
+  if(sum(class(frailty_first_event)=="try-error")>0) {
+  out_f_FE_S3[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_f_FE_S3[j,]<-c(coef(frailty_first_event),(sqrt(vcov(frailty_first_event))),cens_prop_FE)} 
+
+# ----  frailty model + weights + offset(frailty)
+
+PredFrail <- ranef(frailty_first_event)
+PreFr <- data.frame(names(PredFrail$id),PredFrail$id)
+colnames(PreFr) <- c("id","pred_frailty")
+theta_list_FE_S3[j] <- as.numeric(frailty_first_event$vcoef)
+df_FE_weights_frailty <- merge(df_out, PreFr, by="id", all=T)
+
+Model1_weigths_frailty <- try(coxph(Surv(y, d) ~ x+offset(pred_frailty), weights = w, data =  df_FE_weights_frailty))
+
+
+  if(sum(class(Model1_weigths_frailty)=="try-error")>0) {
+  out_fr_w_FE_S3[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_fr_w_FE_S3[j,]<-c(summary(Model1_weigths_frailty)$coef[1],summary(Model1_weigths_frailty)$coef[3],cens_prop_FE)} 
+
+
+# ----------------------
+# Recurrent events #
+# ----------------------
+
+cens_prop<-table(df_families_s3[df_families_s3$event == 1,]$status)[1]/sum(table(df_families_s3[df_families_s3$event == 1,]$status)) #We monitor the resulting proportion of censoring
+
+model1<-try(coxph(Surv(t.start,t.stop,status) ~ x + cluster(idi)  , data =  df_families_s3))
+
+  if(sum(class(model1)=="try-error")>0) {
+  out_RE_S3[j,] = c(NA,NA,NA)
+  } else {
+  out_RE_S3[j,]<-c(summary(model1)$coef[1],summary(model1)$coef[4],cens_prop)}
+
+#------- with weights 1
+
+model_weights<-try(coxph(Surv(t.start,t.stop,status) ~ x + cluster(idi) , weights = w, data =  df3))
+
+  if(sum(class(model_weights)=="try-error")>0) {
+  out_w_RE_S3[j,] = c(NA,NA,NA)
+  } else {
+  out_w_RE_S3[j,]<-c(summary(model_weights)$coef[1],summary(model_weights)$coef[4],cens_prop)}
+
+#------- with frailty
+model_frailty<-try(coxme(Surv(t.start,t.stop,status) ~ x + (1|id) , data =  df_families_s3))
+
+  if(sum(class(model_frailty)=="try-error")>0) {
+  out_f_RE_S3[j,] = c(NA,NA,NA,NA)
+  } else {
+  out_f_RE_S3[j,]<-c(coef(model_frailty),(sqrt(vcov(model_frailty))),cens_prop)} 
+# ------------ Frailty and weights + offset(frail)
+PredictFrailty <- ranef(model_frailty)
+
+PF <- data.frame(names(PredictFrailty$id),PredictFrailty$id)
+colnames(PF) <- c("id","pred_frailty")
+theta_list_RE_S3[j] <- as.numeric(model_frailty$vcoef)
+df_weights_frailty <- merge(df3, PF, by="id", all=T)
+
+Model_weigths_frailty <- try(coxph(Surv(t.start,t.stop,status) ~ x+offset(pred_frailty), weights = w, data =  df_weights_frailty)) 
+
+
+  if(sum(class(Model_weigths_frailty)=="try-error")>0) {
+  out_fr_w_RE_S3[j,] = c(NA,NA,NA)
+  } else {
+  out_fr_w_RE_S3[j,]<-c(summary(Model_weigths_frailty)$coef[1],summary(Model_weigths_frailty)$coef[3],cens_prop)} 
+}  
+```
+
+
+```{r}
+## Results simulations unweighted model/generalised weighted cohort method/frailty model
+Mat <- out_RE  # change out_RE for results other models and other levels of ascertainment bias
+Mat<-t(Mat)
+
+
+#Check NAs#
+index<-sum(is.na(Mat[1,]))
+Mm<-M-index
+
+#M=ncol(Mat)
+#Theoretical Parameters#
+beta=beta
+
+Bias<-mean(Mat[1,],na.rm=T)-beta
+reBias<-Bias/beta
+
+SD<-sqrt(sum((Mat[1,]-mean(Mat[1,]))^2)/(length(Mat[1,])-1))
+SD<-sd(Mat[1,],na.rm=T)
+#MSE<-(Bias^2)+ mean(Mat[2,],na.rm=T)^2
+MSE=(Bias^2)+SD^2
+
+meanSE<-mean(Mat[2,],na.rm=T)
+
+ci.sup<-Mat[1,]+1.96*Mat[2,]
+ci.inf<-Mat[1,]-1.96*Mat[2,]
+i1<-ci.inf<=beta
+i2<-beta<=ci.sup
+Coverage<-sum(i1*i2,na.rm=T)/Mm
+Bias
+reBias
+SD
+MSE
+Coverage
+meanSE
+
+#sum(Mat[5,],na.rm=T)
+#index.NA<-which(is.na(Mat[1,])==T)
+
+round(c(reBias,MSE,Coverage),3) 
+#round(c(Bias,MSE,Coverage),3) #when beta = 0
+```
+
+```{r}
+## Results simulations new two-stage method
+Mat<-out_fr_w_RE # change -out_fr_w_RE for results other levels of ascertainment bias
+Mat<-t(Mat)
+
+#Check NAs#
+index<-sum(is.na(Mat[1,]))
+Mm<-M-index
+
+#M=ncol(Mat)
+#Theoretical Parameters#
+beta=beta
+
+Bias<-mean(Mat[1,],na.rm=T)-beta
+reBias<-Bias/beta
+
+SD<-sqrt(sum((Mat[1,]-mean(Mat[1,]))^2)/(length(Mat[1,])-1))
+SD<-sd(Mat[1,],na.rm=T)
+#MSE<-(Bias^2)+ mean(Mat[2,],na.rm=T)^2
+MSE=(Bias^2)+SD^2
+
+meanSE<-mean(Mat[2,],na.rm=T)
+
+ci.sup<-Mat[1,]+1.96*Mat[2,]
+ci.inf<-Mat[1,]-1.96*Mat[2,]
+i1<-ci.inf<=beta
+i2<-beta<=ci.sup
+Coverage<-sum(i1*i2,na.rm=T)/Mm
+reBias
+SD
+MSE
+Coverage
+meanSE
+
+Mean_theta = mean(theta_list_RE)
+SD_theta = sd(theta_list_RE)
+Mean_theta
+SD_theta
+
+round(c(reBias,MSE,Coverage,Mean_theta,SD_theta),3)
+#round(c(Bias,MSE,Coverage,Mean_theta,SD_theta),3) #When beta = 0
+
+```
