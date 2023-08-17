@@ -1,0 +1,121 @@
+######### Figures used in the introduction section of the Thesis #########
+
+######### Figures describing time to first event data and recurrent events data
+
+library(ggplot2)
+
+### Data generation
+
+set.seed(268)
+n = c(8,4,0,4,0,2)
+data = data.frame()
+for (i in 1:6) {
+  t = sort(runif(n[i],0,100))
+  c = runif(1,0,100)
+  t = t[t < c]
+  start = c(0,t)
+  stop = c(t,c)
+  event = c(1:(length(t)+1))
+  status = c(rep(1,length(t)),0)
+  data.id <- data.frame(ID = i, start = start, stop = stop, event = event, 
+                        status = status, c=c)
+  data <- rbind(data,data.id)
+}
+
+
+Line <- data.frame(rep(unique(data$ID),2),c(data$start[data$start == 0],
+                                            unique(data$c)))
+colnames(Line) <- c("ID","x")
+
+### Recurrent events
+
+ggplot(Line, mapping = aes(x = x, y = ID, group = ID)) + geom_line() +
+  geom_point(data, mapping = aes(x = stop, y = ID, shape = factor(status), 
+                                 size = factor(status))) +
+  scale_shape_manual(values = c(1, 20),labels = c("censored","event")) +
+  scale_size_manual(values = c(2.3, 2),labels = c("censored","event")) +
+  theme_bw() +
+  theme(legend.title=element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  xlab("Time (in years)") + ylab("Individuals") +
+  scale_y_continuous(labels=as.character(Line$ID),breaks=Line$ID) + xlim(0, 100) 
+
+### Time to first event
+
+data <- data[data$event == 1,]
+Line <- data.frame(rep(unique(data$ID),2),c(data$start[data$start == 0],
+                                            data$stop))
+colnames(Line) <- c("ID","x")
+
+ggplot(Line, mapping = aes(x = x, y = ID, group = ID)) + geom_line() +
+  geom_point(data, mapping = aes(x = stop, y = ID, shape = factor(status), 
+                                 size = factor(status))) +
+  scale_shape_manual(values = c(1, 20),labels = c("censored","event")) +
+  scale_size_manual(values = c(2.3, 2),labels = c("censored","event")) +
+  theme_bw() +
+  theme(legend.title=element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  xlab("Time (in years)") + ylab("Individuals") +
+  scale_y_continuous(labels=as.character(Line$ID),breaks=Line$ID) + xlim(0, 100) 
+
+######### Figures describing weighting approach 1 and 2:
+
+### Data generation
+
+set.seed(24)
+n = c(4,4,0,5)
+data = data.frame()
+for (i in 1:4) {
+  t = sort(runif(n[i],0,100))
+  c = runif(1,30,100)
+  t = t[t < c]
+  start = c(0,t)
+  stop = c(t,c)
+  event = c(1:(length(t)+1))
+  status = c(rep(1,length(t)),0)
+  data.id <- data.frame(ID = i, start = start, stop = stop, event = event, 
+                        status = status, c=c)
+  data <- rbind(data,data.id)
+}
+
+Line <- data.frame(rep(unique(data$ID),2),c(data$start[data$start == 0],
+                                            unique(data$c)))
+colnames(Line) <- c("ID","x")
+
+### weighting approach 1
+
+ggplot(Line, mapping = aes(x = x, y = ID, group = ID)) + geom_line() +
+  geom_point(data, mapping = aes(x = stop, y = ID, shape = factor(status), 
+                                 size = factor(status))) + 
+  scale_shape_manual(values = c(1, 20),labels = c("censored","event")) +
+  scale_size_manual(values = c(2.3, 2),labels = c("censored","event")) +
+  theme_bw() +
+  theme(legend.title=element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  xlab("Time (in years)") + ylab("Individuals") +
+  scale_y_continuous(labels=as.character(Line$ID),breaks=Line$ID) + 
+  xlim(0, 100) + annotate("text", x=data$stop[data$ID==1], 
+                y=(data$ID[data$ID == 1]-0.1), 
+                label= "w", fontface = "italic", family = "Georgia", size=3) +
+  annotate("text", x=data$stop[data$ID==2], y=(data$ID[data$ID == 2]-0.1),  
+           label= "w", fontface = "italic", family = "Georgia", size=3) +
+  annotate("text", x=data$stop[data$ID==4], y=(data$ID[data$ID == 4]-0.1),  
+           label= "w", fontface = "italic", family = "Georgia", size=3)
+
+### weighting approach 2
+
+ggplot(Line, mapping = aes(x = x, y = ID, group = ID)) + geom_line() +
+  geom_point(data, mapping = aes(x = stop, y = ID, shape = factor(status), 
+                                 size = factor(status))) + 
+  scale_shape_manual(values = c(1, 20),labels = c("censored","event")) +
+  scale_size_manual(values = c(2.3, 2),labels = c("censored","event")) +
+  theme_bw() +
+  theme(legend.title=element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  xlab("Time (in years)") + ylab("Individuals") +
+  scale_y_continuous(labels=as.character(Line$ID),breaks=Line$ID) + 
+  xlim(0, 100) +  annotate("text", x=data$stop[data$event ==1 & data$ID !=3], 
+           y=(data$ID[data$event == 1 & data$ID !=3]-0.1),  
+           label= "w", fontface = "italic", family = "Georgia", size=3) 
+
+
