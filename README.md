@@ -6,4 +6,6 @@ Included in this repository:
 - Code for the Simulation study
   - Setting 1: Gamma frailty
   - Setting 2: Log-normal frailty
-- Code used for Melanoma study
+- Code used for data study
+
+Calculate_weights.R and Prepare_data.R from https://github.com/vharntzen/wcox are necessary for the simulation and data study. 
