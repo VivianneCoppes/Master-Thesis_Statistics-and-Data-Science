@@ -1,0 +1,364 @@
+---
+title: "Gene 1"
+author: "Vivianne Coppes "
+date: "2023-08-18"
+output: pdf_document
+---
+```{r}
+library(survival)
+library(tidyr)
+library(dplyr)
+library(coxme)
+library(survminer)
+library(frailtyEM)
+```
+
+## Data
+```{r}
+Gen <- data1
+```
+
+## Data exploration before changing data
+```{r}
+# Information on age for all melanoma combined
+Age_all_melanoma <- c(mean(Gen$age_cancer[Gen$M1 == 1],na.rm = TRUE),
+                       sd(Gen$age_cancer[Gen$M1 == 1],na.rm = TRUE),
+                       median(Gen$age_cancer[Gen$M1 == 1],na.rm = TRUE),
+                       min(Gen$age_cancer[Gen$M1 == 1],na.rm = TRUE),
+                       max(Gen$age_cancer[Gen$M1 == 1],na.rm = TRUE))
+
+###
+index <- which(is.na(Gen),arr.ind = TRUE)
+index
+names(Gen[,unique(index[,2])])             #which columns contain NA's
+table(index[,2])
+
+table_ID <- sort(table(Gen$ID[Gen$M1 == 1]))            # number of melanoma's     
+table(table_ID)    
+
+Gen_omitNA <- na.omit(Gen)
+table_ID <- sort(table(Gen_omitNA$ID))
+table(table_ID)                         # number of melanoma's, selected sample
+
+# Create first events dataset:
+ID_unique <- unique(Gen$ID)
+first_melanoma <- aggregate(age_cancer ~ ID, data = Gen, min)
+first_m <- merge(first_melanoma, Gen, by = c("ID", "age_cancer"))
+index2 <- which(is.na(first_m),arr.ind = TRUE) 
+index2
+
+
+Age_first_melanoma <- c(mean(first_m$age_cancer[first_m$M1 == 1]),
+                         sd(first_m$age_cancer[first_m$M1 == 1]),
+                         median(first_m$age_cancer[first_m$M1 == 1]),
+                         min(first_m$age_cancer[first_m$M1 == 1]),
+                         max(first_m$age_cancer[first_m$M1 == 1]))
+Age_censoring <- c(mean(first_m$age_cancer[first_m$M1 == 0]),
+                            sd(first_m$age_cancer[first_m$M1 == 0]),
+                            median(first_m$age_cancer[first_m$M1 == 0]),
+                            min(first_m$age_cancer[first_m$M1 == 0]),
+                            max(first_m$age_cancer[first_m$M1 == 0]))
+PRS_info<- c(mean(first_m$PRS),
+                 sd(first_m$PRS),
+                 median(first_m$PRS),
+                 min(first_m$PRS),
+                 max(first_m$PRS))
+
+table(first_m$Gender) # information on gender 
+table(first_m$M1)     # number of melanoma and censoring first event
+length(unique(first_m$Famnr)) # number of families
+length(ID_unique)             # number of individuals
+nrow(first_m)                 # number of individuals in first melanoma data
+
+Table <- sort(table(first_m$Famnr))
+table(Table) # total of families with certain totals of family members
+
+famsize <- c(mean(Table),sd(Table),median(Table),min(Table),max(Table))
+
+data_info <- data.frame("info" = c("mean","sd","median","min","max"),"Age melanoma total" = round(Age_all_melanoma,3), "Age first melanoma" = round(Age_first_melanoma,3),"Age censoring" = round(Age_censoring,3), "PRS" = round(PRS_info,3),"family sizes" = round(famsize,3))
+data_info
+
+
+cens_prop<-table(first_m$M1)[1]/sum(table(first_m$M1))
+cens_prop
+```
+
+
+```{r}
+# No incidence rates after the age of 80, creating the need to censor
+Gen1 <- Gen
+length(which(Gen1$age_cancer > 79.99999))
+table(Gen1$M1[Gen1$age_cancer > 79.99999])
+Gen1$M1 <- ifelse(Gen1$age_cancer > 79.99999, 0, Gen1$M1)
+Gen1$age_cancer<- ifelse(Gen1$age_cancer > 79.99999, 79.99999, Gen1$age_cancer)
+```
+
+## Data exploration after removing missing data and values > 80
+```{r}
+
+###
+Gen1 <- na.omit(Gen1)
+sum(is.na(Gen1))
+
+table_ID <- sort(table(Gen1$ID[Gen$M1 == 1]))         # number of melanoma's     
+table(table_ID)    
+
+hist(table_ID, xlab = 'Number of melanoma', ylab = "Frequency", main = "")
+
+# Information on age for all melanoma combined
+Age_all_melanoma <- c(mean(Gen1$age_cancer[Gen1$M1 == 1],na.rm = TRUE),
+                       sd(Gen1$age_cancer[Gen1$M1 == 1],na.rm = TRUE),
+                       median(Gen1$age_cancer[Gen1$M1 == 1],na.rm = TRUE),
+                       min(Gen1$age_cancer[Gen1$M1 == 1],na.rm = TRUE),
+                       max(Gen1$age_cancer[Gen1$M1 == 1],na.rm = TRUE))
+
+
+# Create first events dataset:
+ID_unique <- unique(Gen1$ID)
+first_melanoma <- aggregate(age_cancer ~ ID, data = Gen1, min)
+first_m <- merge(first_melanoma, Gen1, by = c("ID", "age_cancer"))
+index2 <- which(is.na(first_m),arr.ind = TRUE) 
+index2
+
+
+Age_first_melanoma <- c(mean(first_m$age_cancer[first_m$M1 == 1]),
+                         sd(first_m$age_cancer[first_m$M1 == 1]),
+                         median(first_m$age_cancer[first_m$M1 == 1]),
+                         min(first_m$age_cancer[first_m$M1 == 1]),
+                         max(first_m$age_cancer[first_m$M1 == 1]))
+Age_censoring <- c(mean(first_m$age_cancer[first_m$M1 == 0]),
+                            sd(first_m$age_cancer[first_m$M1 == 0]),
+                            median(first_m$age_cancer[first_m$M1 == 0]),
+                            min(first_m$age_cancer[first_m$M1 == 0]),
+                            max(first_m$age_cancer[first_m$M1 == 0]))
+PRS_info<- c(mean(first_m$PRS),
+                 sd(first_m$PRS),
+                 median(first_m$PRS),
+                 min(first_m$PRS),
+                 max(first_m$PRS))
+
+table(first_m$Gender) # information on gender 
+table(first_m$M1)     # number of melanoma and censoring first event
+length(unique(first_m$Famnr)) # number of families
+length(ID_unique)             # number of individuals
+
+
+Table <- sort(table(first_m$Famnr))
+table(Table) # total of families with certain totals of family members
+hist(Table, xlab = 'Number of family members', ylab = "Frequency", main = "")
+
+famsize <- c(mean(Table),sd(Table),median(Table),min(Table),max(Table))
+
+data_info <- data.frame("info" = c("mean","sd","median","min","max"),"Age melanoma total" = round(Age_all_melanoma,3), "Age first melanoma" = round(Age_first_melanoma,3),"Age censoring" = round(Age_censoring,3), "PRS" = round(PRS_info,3),"family sizes" = round(famsize,3))
+data_info
+
+
+cens_prop<-table(first_m$M1)[1]/sum(table(first_m$M1))
+cens_prop
+```
+
+
+```{r}
+ID_unique1 <- unique(Gen1$ID)
+first_melanoma1 <- aggregate(age_cancer ~ ID, data = Gen1, min)
+first_m1 <- merge(first_melanoma1, Gen1, by = c("ID", "age_cancer"))
+index21 <- which(is.na(first_m1),arr.ind = TRUE) 
+index21
+
+table(first_m1$M1) #number of melanoma and censoring first event,after selection
+cens_prop<-table(first_m1$M1)[1]/sum(table(first_m1$M1))
+cens_prop
+```
+
+```{r}
+hist(first_m1$age_cancer[first_m1$M1 == 1], breaks = 20, xlab = "age first melanoma", main = "")
+hist(first_m1$PRS, breaks = 20, xlab = "PRS", main = "")
+```
+
+```{r}
+#Create dataframe for prepare/weight functions: 
+df.out <- first_m1
+names(df.out)[names(df.out) == "ID"] <- "idi"
+names(df.out)[names(df.out) == "Famnr"] <- "id"
+names(df.out)[names(df.out) == "age_cancer"] <- "y"
+names(df.out)[names(df.out) == "M1"] <- "d"
+#head(df.out)
+```
+```{r}
+# calculate population incidence:
+Penetrance <- c(0, 0.14,0.24,0.28)
+surv <- 1 - Penetrance 
+part2 <- numeric()
+for(i in 3:length(surv)) {
+  part2[1]<- -log(surv[2]/surv[1])/50
+  part2[2]<- -log(surv[3]/surv[2])/20
+  part2[3]<- -log(surv[4]/surv[3])/10
+}
+
+pop_incidence <- part2*100000
+breaks <- c(0,50,70,80)
+
+# Prepare data
+df_out <- Prepare_data(df.out, pop_incidence, breaks)
+
+# Weight calculation
+w<-Calculate_weights(df_out)
+df_out$w <- w
+weights_info <- data.frame(df_out$idi, df_out$w)
+colnames(weights_info) <- c("ID","w")
+
+```
+
+# Models for first event analysis
+```{r}
+
+#normal cox model + strata for gender
+Model1<-coxph(Surv(y, d==1) ~ PRS + strata(Gender) + cluster(idi), data =  df_out) 
+summary(Model1)
+cox.zph(Model1)
+ggcoxzph(cox.zph(Model1))
+
+# Generalised weighted cohort 
+Model2<-coxph(Surv(y, d==1) ~ PRS + strata(Gender) + cluster(idi) , weights = w, data =  df_out)
+summary(Model2)
+cox.zph(Model2)
+ggcoxzph(cox.zph(Model2))
+
+# frailty model
+Model3<-coxme(Surv(y, d) ~ PRS + strata(Gender) + (1|id), data =  df_out)  
+summary(Model3)
+
+ci.up<-coef(Model3)+1.96*sqrt(vcov(Model3))
+ci.low<-coef(Model3)-1.96*sqrt(vcov(Model3))
+c(exp(ci.low),exp(ci.up))
+
+# new two-stage method
+Famfrail_predict <- ranef(Model3)
+PF <- data.frame(names(Famfrail_predict$id),Famfrail_predict$id)
+colnames(PF) <- c("id","pred_frailty")
+df_weights_frailty <- merge(df_out, PF, by="id", all=T)
+
+Model4<- coxph(Surv(y,d) ~ PRS + strata(Gender) + offset(pred_frailty), weights = w, data =  df_weights_frailty)
+summary(Model4)
+cox.zph(Model4)
+ggcoxzph(cox.zph(Model4))
+
+```
+
+# recurrent events analysis
+```{r}
+# change data to long data for recurrent events
+Long_Gen1 <- Gen1[,-3]
+PRS_data <- first_m1[,c(1:3)]
+PRS_data <- merge(weights_info,PRS_data, by = "ID", all=T)
+names(PRS_data)[names(PRS_data) == "age_cancer"] <- "age_first_melanoma"
+Long_Gen1 <- merge(Long_Gen1, PRS_data, by = "ID", all=T)
+Long_Gen1$start <- 0
+Long_Gen1 <- na.omit(Long_Gen1)
+
+long.Gen1 <- data.frame()
+ for(i in 1:length(unique(Long_Gen1$ID))) {
+  dat <- Long_Gen1[Long_Gen1$ID == unique(Long_Gen1$ID)[i],]
+  dat <- dat[order(dat$age_cancer),]
+  start <- c(0,dat$age_cancer[-length(dat$age_cancer)])
+  stop <- dat$age_cancer
+  dat$start <- start
+  dat$stop <- stop
+  long.Gen1 <- rbind(long.Gen1,dat)
+ }
+Long.Gen1 <- long.Gen1
+head(Long.Gen1)
+```
+
+## models for recurrent event analysis weights on all events
+```{r}
+# unweighted method
+Model_RE_1<-coxph(Surv(start,stop,M1) ~ PRS + strata(Gender) + cluster(ID)  , data =  Long.Gen1)
+summary(Model_RE_1)
+cox.zph(Model_RE_1)
+
+# generalised weighted cohort method
+Model_RE_2<-coxph(Surv(start,age_cancer,M1) ~ PRS + strata(Gender) + cluster(ID) , weights = w, data =  Long.Gen1)
+summary(Model_RE_2)
+cox.zph(Model_RE_2)
+
+# frailty model
+Model_RE_3<-coxme(Surv(start,age_cancer,M1) ~ PRS + strata(Gender) + (1|Famnr) , data =  Long.Gen1)
+summary(Model_RE_3)
+cox.zph(Model_RE_3)
+
+ci.up<-coef(Model_RE_3)+1.96*sqrt(vcov(Model_RE_3))
+ci.low<-coef(Model_RE_3)-1.96*sqrt(vcov(Model_RE_3))
+c(exp(ci.low),exp(ci.up))
+
+# new two-stage method
+PredictFrailty <- ranef(Model_RE_3)
+PF <- data.frame(names(PredictFrailty$Famnr),PredictFrailty$Famnr)
+colnames(PF) <- c("Famnr","pred_frailty")
+theta <- as.numeric(Model_RE_3$vcoef)
+df_weights_frailty <- merge(Long.Gen1, PF, by="Famnr", all=T)
+
+Model_RE_4 <- coxph(Surv(start,age_cancer,M1) ~ PRS + strata(Gender) + offset(pred_frailty), weights = w, data =  df_weights_frailty)
+summary(Model_RE_4)
+cox.zph(Model_RE_4)
+```
+
+## models for recurrent event analysis weighting approach 2
+```{r}
+# change data to long data for recurrent events
+Long_Gen1 <- Gen1[,-3]
+PRS_data <- first_m1[,c(1:3)]
+PRS_data <- merge(weights_info,PRS_data, by = "ID", all=T)
+names(PRS_data)[names(PRS_data) == "age_cancer"] <- "age_first_melanoma"
+Long_Gen1 <- merge(Long_Gen1, PRS_data, by = "ID", all=T)
+Long_Gen1$start <- 0
+Long_Gen1 <- na.omit(Long_Gen1)
+
+
+long.Gen1 <- data.frame()
+ for(i in 1:length(unique(Long_Gen1$ID))) {
+  dat <- Long_Gen1[Long_Gen1$ID == unique(Long_Gen1$ID)[i],]
+  dat <- dat[order(dat$age_cancer),]
+  start <- c(0,dat$age_cancer[-length(dat$age_cancer)])
+  stop <- dat$age_cancer
+  dat$start <- start
+  dat$stop <- stop
+  dat$event <- seq(1:(nrow(dat)))
+  long.Gen1 <- rbind(long.Gen1,dat)
+ }
+Long.Gen1 <- long.Gen1
+Long.Gen1$w <- ifelse(Long.Gen1$event > 1, 1, Long.Gen1$w)
+head(Long.Gen1)
+```
+
+```{r}
+# unweighted method
+Model_RE_1<-coxph(Surv(start,stop,M1) ~ PRS + strata(Gender) + cluster(ID)  , data =  Long.Gen1)
+summary(Model_RE_1)
+cox.zph(Model_RE_1)
+
+# generalised weighted cohort method
+Model_RE_2<-coxph(Surv(start,age_cancer,M1) ~ PRS + strata(Gender) + cluster(ID) , weights = w, data =  Long.Gen1)
+summary(Model_RE_2)
+cox.zph(Model_RE_2)
+
+# frailty model
+Model_RE_3<-coxme(Surv(start,age_cancer,M1) ~ PRS + strata(Gender) + (1|Famnr) , data =  Long.Gen1)
+summary(Model_RE_3)
+#cox.zph(Model_RE_3)
+
+ci.up<-coef(Model_RE_3)+1.96*sqrt(vcov(Model_RE_3))
+ci.low<-coef(Model_RE_3)-1.96*sqrt(vcov(Model_RE_3))
+c(exp(ci.low),exp(ci.up))
+
+# new two-stage method
+PredictFrailty <- ranef(Model_RE_3)
+PF <- data.frame(names(PredictFrailty$Famnr),PredictFrailty$Famnr)
+colnames(PF) <- c("Famnr","pred_frailty")
+theta <- as.numeric(Model_RE_3$vcoef)
+df_weights_frailty <- merge(Long.Gen1, PF, by="Famnr", all=T)
+
+Model_RE_4 <- coxph(Surv(start,age_cancer,M1) ~ PRS + strata(Gender) + offset(pred_frailty), weights = w, data =  df_weights_frailty)
+summary(Model_RE_4)
+cox.zph(Model_RE_4)
+```
